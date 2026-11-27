@@ -1,0 +1,42 @@
+
+services:
+  olms-db:
+    image: mysql:8.0
+    container_name: ai-olms-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: olmsrootpassword
+      MYSQL_DATABASE: olms_db
+      MYSQL_USER: olms_user
+      MYSQL_PASSWORD: olms_password
+    volumes:
+      - olms_db_data:/var/lib/mysql
+    networks:
+      - olms-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-polmsrootpassword"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  olms-web:
+    image: tomcat:10.1-jdk17-temurin
+    container_name: ai-olms-tomcat
+    restart: always
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./AI-OLMS/target/ai-olms.war:/usr/local/tomcat/webapps/ai-olms.war:ro
+    depends_on:
+      olms-db:
+        condition: service_healthy
+    networks:
+      - olms-net
+
+volumes:
+  olms_db_data:
+    driver: local
+
+networks:
+  olms-net:
+    driver: bridge

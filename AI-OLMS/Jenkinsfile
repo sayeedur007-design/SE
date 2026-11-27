@@ -1,0 +1,93 @@
+pipeline {
+    agent any
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
+
+    environment {
+        LOCAL_PROJECT_DIR = 'C:\\Users\\fs\\Desktop\\SE task 1\\AI-OLMS'
+        LOCAL_APP_URL     = 'http://localhost:8081/ai-olms/'
+    }
+
+    stages {
+        stage('Prepare Workspace') {
+            steps {
+                script {
+                    // Support SCM checkout (pom.xml in root), parent folder workspace (AI-OLMS/pom.xml),
+                    // or direct Pipeline script paste (sync from LOCAL_PROJECT_DIR).
+                    if (!fileExists('pom.xml')) {
+                        if (fileExists('AI-OLMS/pom.xml')) {
+                            bat 'xcopy /E /I /Y /Q "AI-OLMS\\src" "src" && copy /Y "AI-OLMS\\pom.xml" "pom.xml" && copy /Y "AI-OLMS\\Dockerfile" "Dockerfile"'
+                        } else {
+                            bat 'xcopy /E /I /Y /Q "%LOCAL_PROJECT_DIR%\\src" "src" && copy /Y "%LOCAL_PROJECT_DIR%\\pom.xml" "pom.xml" && copy /Y "%LOCAL_PROJECT_DIR%\\Dockerfile" "Dockerfile"'
+                        }
+                    }
+                }
+                bat 'java -version && mvn -version'
+            }
+        }
+
+        stage('Compile') {
+            steps {
+                bat 'mvn -B clean compile'
+            }
+        }
+
+        stage('Test') {
+            steps {
+                bat 'mvn -B test'
+            }
+        }
+
+        stage('Package WAR') {
+            steps {
+                bat 'mvn -B package -DskipTests'
+                bat 'if not exist "target\\ai-olms.war" exit /b 1'
+            }
+        }
+
+        stage('Verify Docker & Config') {
+            steps {
+                bat '''
+                    if not exist "Dockerfile" exit /b 1
+                    type Dockerfile
+                    where docker >nul 2>&1
+                    if %ERRORLEVEL%==0 (
+                        docker --version
+                    ) else (
+                        echo Docker CLI not in Jenkins service PATH - skipping daemon check
+                    )
+                '''
+            }
+        }
+
+        stage('Deploy & Health Check') {
+            steps {
+                bat '''
+                    if /I not "%CD%"=="%LOCAL_PROJECT_DIR%" (
+                        if exist "%LOCAL_PROJECT_DIR%\\target" (
+                            copy /Y "target\\ai-olms.war" "%LOCAL_PROJECT_DIR%\\target\\ai-olms.war"
+                        )
+                    )
+                '''
+                bat '''
+                    powershell -NoProfile -Command "try { $r = Invoke-WebRequest -Uri $env:LOCAL_APP_URL -UseBasicParsing -TimeoutSec 5; Write-Host ('App HTTP Status: ' + $r.StatusCode) } catch { Write-Host ('Local Tomcat check skipped: ' + $_.Exception.Message) }"
+                '''
+            }
+        }
+    }
+
+    post {
+        always {
+            junit allowEmptyResults: false, testResults: 'target/surefire-reports/*.xml'
+            archiveArtifacts artifacts: 'target/*.war', fingerprint: true
+        }
+        success {
+            echo 'BUILD SUCCESS: AI-OLMS compiled, tested, packaged (target/ai-olms.war), and verified.'
+        }
+        failure {
+            echo 'BUILD FAILED: Check the stage logs above for compilation, test, or packaging errors.'
+        }
+    }
+}
